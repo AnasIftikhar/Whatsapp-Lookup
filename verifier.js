@@ -2,6 +2,7 @@ let excelData = [];
 let results = [];
 let isProcessing = false;
 let currentIndex = 0;
+let originalFile = null;
 
 const elements = {
     uploadSection: document.getElementById('uploadSection'),
@@ -17,7 +18,8 @@ const elements = {
     downloadBtn: document.getElementById('downloadBtn'),
     logContainer: document.getElementById('logContainer'),
     whatsappFrame: document.getElementById('whatsappFrame'),
-    stopBtn: document.getElementById('stopBtn')
+    stopBtn: document.getElementById('stopBtn'),
+    downloadValidBtn: document.getElementById('downloadValidBtn')
 };
 
 // Upload section interactions
@@ -47,9 +49,13 @@ elements.fileInput.addEventListener('change', (e) => {
 elements.startBtn.addEventListener('click', startVerification);
 elements.stopBtn.addEventListener('click', stopVerification);
 elements.downloadBtn.addEventListener('click', downloadResults);
+elements.downloadValidBtn.addEventListener('click', downloadValidOnly);
+
 
 function handleFileUpload(file) {
+    originalFile = file; // Store original file
     const reader = new FileReader();
+    // ... rest of the code stays the same
     reader.onload = (e) => {
         try {
             const data = new Uint8Array(e.target.result);
@@ -100,7 +106,7 @@ async function startVerification() {
     elements.statusBox.classList.add('active');
     elements.logContainer.classList.add('active');
     elements.downloadBtn.style.display = 'none';
-
+    elements.downloadValidBtn.style.display = 'none';
     const columns = Object.keys(excelData[0]);
     const phoneColumn = columns.find(col => col.toLowerCase() === 'phone');
 
@@ -147,6 +153,7 @@ async function startVerification() {
     updateProgress(results.length, results.length);
     elements.statusText.textContent = 'Verification completed!';
     elements.downloadBtn.style.display = 'block';
+    elements.downloadValidBtn.style.display = 'block';
     elements.stopBtn.style.display = 'none';
     elements.startBtn.style.display = 'block';
     elements.startBtn.disabled = false;
@@ -172,6 +179,7 @@ async function checkWhatsApp(phone) {
             const tabId = tab.id;
             let resolved = false;
             let checkInterval;
+            let firstResult = null;
 
             const timeout = setTimeout(() => {
                 if (!resolved) {
@@ -180,23 +188,33 @@ async function checkWhatsApp(phone) {
                     chrome.tabs.remove(tabId);
                     resolve('Unknown');
                 }
-            }, 30000); // 30 seconds timeout
+            }, 30000);
 
             chrome.tabs.onUpdated.addListener(function listener(updatedTabId, changeInfo) {
                 if (updatedTabId === tabId && changeInfo.status === 'complete') {
-                    // Start checking every 2 seconds after page loads
                     checkInterval = setInterval(() => {
                         chrome.tabs.sendMessage(tabId, { action: 'checkWhatsApp' }, (response) => {
                             if (response && response.status !== 'Loading' && !resolved) {
-                                resolved = true;
-                                clearTimeout(timeout);
-                                clearInterval(checkInterval);
-                                chrome.tabs.onUpdated.removeListener(listener);
-                                chrome.tabs.remove(tabId);
-                                resolve(response.status);
+                                if (!firstResult) {
+                                    // First detection - store and wait 5 seconds
+                                    firstResult = response.status;
+                                    setTimeout(() => {
+                                        // Force a second check after 5 seconds
+                                        chrome.tabs.sendMessage(tabId, { action: 'checkWhatsApp' }, (retryResponse) => {
+                                            if (retryResponse && retryResponse.status !== 'Loading') {
+                                                resolved = true;
+                                                clearTimeout(timeout);
+                                                clearInterval(checkInterval);
+                                                chrome.tabs.onUpdated.removeListener(listener);
+                                                chrome.tabs.remove(tabId);
+                                                resolve(retryResponse.status);
+                                            }
+                                        });
+                                    }, 5000);
+                                }
                             }
                         });
-                    }, 2000); // Check every 2 seconds
+                    }, 2000);
                 }
             });
         });
@@ -230,14 +248,12 @@ function downloadResults() {
     const phoneColumn = columns.find(col => col.toLowerCase() === 'phone');
     const phoneIndex = columns.indexOf(phoneColumn);
 
-    // Create new column order: insert 'Whatsapp' after PHONE column
     const newColumns = [
         ...columns.slice(0, phoneIndex + 1),
         'Whatsapp',
         ...columns.slice(phoneIndex + 1).filter(col => col !== 'Status')
     ];
 
-    // Remap data with new column order
     const outputData = results.map(row => {
         const newRow = {};
         newColumns.forEach(col => {
@@ -251,13 +267,92 @@ function downloadResults() {
     });
 
     const worksheet = XLSX.utils.json_to_sheet(outputData, { header: newColumns });
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Results');
 
-    const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
-    XLSX.writeFile(workbook, `WhatsApp_Verified_${timestamp}.xlsx`);
+    // Read original file to preserve column widths
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        const data = new Uint8Array(e.target.result);
+        const originalWorkbook = XLSX.read(data, { type: 'array', cellStyles: true });
+        const originalSheet = originalWorkbook.Sheets[originalWorkbook.SheetNames[0]];
 
-    addLog('Results downloaded successfully', 'success');
+        if (originalSheet['!cols']) {
+            const newCols = [
+                ...originalSheet['!cols'].slice(0, phoneIndex + 1),
+                { wch: 12 },
+                ...originalSheet['!cols'].slice(phoneIndex + 1)
+            ];
+            worksheet['!cols'] = newCols;
+        }
+
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, worksheet, 'Results');
+
+        const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
+        XLSX.writeFile(workbook, `WhatsApp_Verified_${timestamp}.xlsx`);
+
+        addLog('Results downloaded successfully', 'success');
+    };
+
+    reader.readAsArrayBuffer(originalFile);
+}
+
+function downloadValidOnly() {
+    const validResults = results.filter(row => row.Status === 'Exists');
+
+    if (validResults.length === 0) {
+        alert('No valid numbers found!');
+        return;
+    }
+
+    const columns = Object.keys(excelData[0]);
+    const phoneColumn = columns.find(col => col.toLowerCase() === 'phone');
+    const phoneIndex = columns.indexOf(phoneColumn);
+
+    const newColumns = [
+        ...columns.slice(0, phoneIndex + 1),
+        'Whatsapp',
+        ...columns.slice(phoneIndex + 1).filter(col => col !== 'Status')
+    ];
+
+    const outputData = validResults.map(row => {
+        const newRow = {};
+        newColumns.forEach(col => {
+            if (col === 'Whatsapp') {
+                newRow[col] = row.Status || 'Unknown';
+            } else {
+                newRow[col] = row[col];
+            }
+        });
+        return newRow;
+    });
+
+    const worksheet = XLSX.utils.json_to_sheet(outputData, { header: newColumns });
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        const data = new Uint8Array(e.target.result);
+        const originalWorkbook = XLSX.read(data, { type: 'array', cellStyles: true });
+        const originalSheet = originalWorkbook.Sheets[originalWorkbook.SheetNames[0]];
+
+        if (originalSheet['!cols']) {
+            const newCols = [
+                ...originalSheet['!cols'].slice(0, phoneIndex + 1),
+                { wch: 12 },
+                ...originalSheet['!cols'].slice(phoneIndex + 1)
+            ];
+            worksheet['!cols'] = newCols;
+        }
+
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, worksheet, 'Valid Results');
+
+        const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
+        XLSX.writeFile(workbook, `WhatsApp_Valid_Only_${timestamp}.xlsx`);
+
+        addLog(`Valid results downloaded: ${validResults.length} numbers`, 'success');
+    };
+
+    reader.readAsArrayBuffer(originalFile);
 }
 
 function addLog(message, type = 'info') {

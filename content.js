@@ -5,16 +5,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         // Check for invalid number popup
         if (bodyText.includes('Phone number shared via url is invalid') ||
             bodyText.includes('Phone number shared via URL is invalid')) {
-            sendResponse({ status: 'Invalid' });
+            sendResponse({ status: 'Invalid', needsRetry: true });
             return true;
         }
 
-        // Check if chat message input box is present
+        // Check for valid number indicators
         const messageInput = document.querySelector('div[role="textbox"][contenteditable="true"]');
-        const composeBox = document.querySelector('[data-testid="conversation-compose-box-input"]');
-        const chatPanel = document.querySelector('[data-testid="conversation-panel-wrapper"]');
-
-        // Check for "Type a message" placeholder
         const hasTypePlaceholder = document.querySelector('[placeholder*="Type a message"]') ||
             document.querySelector('[data-placeholder*="Type a message"]') ||
             Array.from(document.querySelectorAll('*')).some(el =>
@@ -23,8 +19,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 el.getAttribute('aria-label')?.includes('Type a message')
             );
 
-        if (messageInput || composeBox || chatPanel || hasTypePlaceholder) {
-            sendResponse({ status: 'Exists' });
+        if (messageInput || hasTypePlaceholder) {
+            sendResponse({ status: 'Exists', needsRetry: true });
             return true;
         }
 
