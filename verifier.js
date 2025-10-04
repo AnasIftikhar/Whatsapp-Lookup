@@ -19,7 +19,9 @@ const elements = {
     logContainer: document.getElementById('logContainer'),
     whatsappFrame: document.getElementById('whatsappFrame'),
     stopBtn: document.getElementById('stopBtn'),
-    downloadValidBtn: document.getElementById('downloadValidBtn')
+    downloadValidBtn: document.getElementById('downloadValidBtn'),
+    limitSection: document.getElementById('limitSection'),
+    limitInput: document.getElementById('limitInput')
 };
 
 // Upload section interactions
@@ -81,6 +83,7 @@ function handleFileUpload(file) {
             elements.fileName.textContent = `📄 ${file.name}`;
             elements.fileDetails.textContent = `${excelData.length} rows • ${phoneCount} phone numbers • Column: ${phoneColumn}`;
             elements.fileInfo.classList.add('active');
+            elements.limitSection.style.display = 'block';
             elements.startBtn.disabled = false;
 
             addLog(`File loaded: ${file.name}`, 'success');
@@ -100,6 +103,10 @@ async function startVerification() {
     currentIndex = 0;
     results = JSON.parse(JSON.stringify(excelData));
 
+    // Get limit value
+    const limitValue = parseInt(elements.limitInput.value) || null;
+    let validCount = 0;
+
     elements.startBtn.disabled = true;
     elements.startBtn.style.display = 'none';
     elements.stopBtn.style.display = 'block';
@@ -107,16 +114,29 @@ async function startVerification() {
     elements.logContainer.classList.add('active');
     elements.downloadBtn.style.display = 'none';
     elements.downloadValidBtn.style.display = 'none';
+
     const columns = Object.keys(excelData[0]);
     const phoneColumn = columns.find(col => col.toLowerCase() === 'phone');
 
-    addLog('Starting verification process...', 'info');
+    if (limitValue) {
+        addLog(`Starting verification with limit: ${limitValue} valid numbers`, 'info');
+    } else {
+        addLog('Starting verification process...', 'info');
+    }
 
     for (let i = 0; i < results.length; i++) {
         if (!isProcessing) {
             addLog('Verification stopped', 'warning');
             break;
-        } currentIndex = i;
+        }
+
+        // Check if limit reached
+        if (limitValue && validCount >= limitValue) {
+            addLog(`Limit reached: ${limitValue} valid numbers found`, 'success');
+            break;
+        }
+
+        currentIndex = i;
         const row = results[i];
         const phone = row[phoneColumn];
 
@@ -140,25 +160,31 @@ async function startVerification() {
         try {
             const status = await checkWhatsApp(cleanPhone);
             row.Status = status;
-            addLog(`Row ${i + 1}: ${status}`, status === 'Exists' ? 'success' : 'error');
+
+            if (status === 'Exists') {
+                validCount++;
+                addLog(`Row ${i + 1}: ${status} (${validCount}/${limitValue || '∞'})`, 'success');
+            } else {
+                addLog(`Row ${i + 1}: ${status}`, 'error');
+            }
         } catch (error) {
             row.Status = 'Error';
             addLog(`Row ${i + 1}: Error - ${error.message}`, 'error');
         }
 
         updateSummary();
-        await delay(3000); // Delay between checks
+        await delay(3000);
     }
 
     updateProgress(results.length, results.length);
-    elements.statusText.textContent = 'Verification completed!';
+    elements.statusText.textContent = `Verification completed! Found ${validCount} valid numbers`;
     elements.downloadBtn.style.display = 'block';
     elements.downloadValidBtn.style.display = 'block';
     elements.stopBtn.style.display = 'none';
     elements.startBtn.style.display = 'block';
     elements.startBtn.disabled = false;
     isProcessing = false;
-    addLog('Verification process completed!', 'success');
+    addLog(`Verification completed! Total valid numbers: ${validCount}`, 'success');
 }
 
 function stopVerification() {
